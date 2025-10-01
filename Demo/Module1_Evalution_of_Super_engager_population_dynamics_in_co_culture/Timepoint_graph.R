@@ -63,7 +63,7 @@ Raw_per_overall <- master_clust_Live %>%
 Raw_per_overall$Time <- Raw_per_overall$Time / 30
 
 # Filter out groups with fewer than 5 cells
-Raw_per_overall <- Raw_per_overall %>% filter(n > 5)
+#Raw_per_overall <- Raw_per_overall %>% filter(n > 5)
 
 # Filter for imaging time, remove all the points before imaging time
 Raw_per_overall <- Raw_per_overall %>%
@@ -72,53 +72,70 @@ Raw_per_overall <- Raw_per_overall %>%
 ### Subset cluster 9
 Raw_per_overall <- subset(Raw_per_overall, cluster == "9")
 
+# Get unique T cell line names
+unique_tcells <- unique(Raw_per_overall$tcell_line)
+print(unique_tcells)
+
 # Further subset the data for specific T cell lines
-Raw_per_overall <- subset(Raw_per_overall, tcell_line %in% c("CD4_TEG", "CD8_TEG"))
+Raw_per_overall <- subset(Raw_per_overall, 
+                          tcell_line %in% unique(Raw_per_overall$tcell_line))
 
 imaging_time <- min(Raw_per_overall$Time)
 
-# Determine window for CD8_TEG only
-max_points_time_cd8 <- Raw_per_overall %>%
-  filter(tcell_line == "CD8_TEG") %>%
+
+# window offsets in Time units
+offset_left  <- 15/30
+offset_right <- 30/30
+
+# palette keyed to tcell_line
+lvls <- sort(unique(Raw_per_overall$tcell_line))
+pal  <- brewer.pal(max(3, length(lvls)), "Set2")[seq_along(lvls)]
+names(pal) <- lvls
+
+library(scales)
+
+x_min <- floor(min(Raw_per_overall$Time, na.rm = TRUE))
+x_max <- ceiling(max(Raw_per_overall$Time, na.rm = TRUE))
+
+# one window per tcell_line:
+# take the Time at max(perc) within each line, then average if duplicates exist
+win_df <- Raw_per_overall %>%
   group_by(tcell_line) %>%
-  summarise(MaxTime = Time[which.max(perc)], MaxPerc = max(perc)) %>%
-  ungroup()
+  summarise(center_time = mean(Time[which(perc == max(perc, na.rm = TRUE))], na.rm = TRUE),
+            .groups = "drop") %>%
+  mutate(window_start = center_time - offset_left,
+         window_end   = center_time + offset_right)
 
-mean_max_time_cd8 <- mean(max_points_time_cd8$MaxTime)
-
-# Calculate the window for CD8_TEG
-window_start_cd8 <- mean_max_time_cd8 - (15 / 30)
-window_end_cd8 <- mean_max_time_cd8 + (30 / 30)
-
-
-# Plot for both CD4_TEG and CD8_TEG
-Per2 <- ggplot(Raw_per_overall, aes(Time, perc, group = tcell_line, color = as.factor(tcell_line))) +
+Per2 <- ggplot(Raw_per_overall,
+               aes(Time, perc, group = tcell_line, color = tcell_line)) +
   geom_smooth(size = 1, span = 0.5) +
-  geom_rect(aes(xmin = window_start_cd8, xmax = window_end_cd8, ymin = -Inf, ymax = Inf), fill = "red", alpha = 0.005, inherit.aes = FALSE) +
-  geom_vline(xintercept = c(window_start_cd8, window_end_cd8), color = "black") +
+  
+  # shaded window per line (fill mapped to tcell_line so legend matches; hide fill legend)
+  geom_rect(data = win_df,
+            aes(xmin = window_start, xmax = window_end,
+                ymin = -Inf, ymax = Inf, fill = tcell_line),
+            alpha = 0.1, inherit.aes = FALSE, show.legend = FALSE) +
+  
+  # verticals in the SAME color as each line; no extra legend keys
+  geom_vline(data = win_df, aes(xintercept = window_start, color = tcell_line),
+             linetype = "dotdash", show.legend = FALSE) +
+  geom_vline(data = win_df, aes(xintercept = window_end,   color = tcell_line),
+             linetype = "dotdash", show.legend = FALSE) +
+  
   theme_bw() +
   ylab("% T cells in cluster 9 (super-engagers)") +
-  xlab("Time in Co-culture(Hours)") +
-  scale_x_continuous(breaks = c(imaging_time, seq(from = ceiling(imaging_time), to = max(Raw_per_overall$Time), by = 1))) +
-  scale_fill_manual(values = c(
-    "CD4_TEG" = "darkolivegreen3",
-    "CD8_TEG" = "dodgerblue"
-  )) +
-  scale_color_manual(values = c(
-    CD4_TEG = "darkolivegreen3",
-    CD8_TEG = "dodgerblue"
-  )) +
-  theme(
-    plot.margin = margin(t = 10, r = 10, b = 30, l = 10, unit = "pt"),
-    axis.text.x = element_text(vjust = 0.5, size = 10),
-    axis.text.y = element_text(size = 10),
-    axis.title.y = element_text(size = 12),
-    axis.title.x = element_text(size = 12),
-    legend.text = element_text(size = 10),
-    aspect.ratio = 1
-  ) +
-  labs(color = "T Cell Type", fill = "T Cell Type") +
-  ggtitle("T-cell engagement at different time points")
+  xlab("Time in Co-culture (Hours)") +
+  scale_x_continuous(breaks = c(imaging_time,
+                                seq(from = ceiling(imaging_time),
+                                    to = max(Raw_per_overall$Time, na.rm = TRUE), by = 1))) +
+  scale_color_manual(values = pal, name = "T Cell Type") +
+  scale_fill_manual(values  = pal, guide = "none") +
+  ggtitle("T-cell engagement at different time points")+
+  scale_x_continuous(
+    breaks = seq(x_min, x_max, by = 1),                # integers
+    labels = label_number(accuracy = 1),               # show as 0,1,2,...
+    minor_breaks = seq(x_min, x_max, by = 0.25)        # quarters
+  )
 
 ggsave(filename = paste0(output_dir, "T-cell_engagementVsTime.png"), plot = Per2, width = 8, height = 6)
 
@@ -128,3 +145,4 @@ write.csv(Raw_per_overall, file.path(paste0(output_dir, "T-cell_engagementVsTime
 
 # Display plots
 Per2
+
